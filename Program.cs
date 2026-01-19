@@ -1,10 +1,17 @@
-﻿using HarmonyLib;
+using HarmonyLib;
 using System;
-using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Reflection;
-using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 class Program
 {
+    private static string APP_SECRET = "ENTER_APP_SECRET";
+
     [STAThread]
     static void Main(string[] args)
     {
@@ -24,22 +31,21 @@ class Program
             Console.WriteLine($"Error loading assembly: {ex.Message}");
             return;
         }
-
+   
         var harmony = new Harmony("_EAuth.Patcher");
-
-        var originalMethod = typeof(JsonElement).GetMethod(
-                  "GetProperty",            
-                  new Type[] { typeof(string) }             
-              );
       
-        var prefixPatch = typeof(Program).GetMethod(
-                 nameof(Patch),                       
-                 BindingFlags.Static | BindingFlags.Public   
-             );
+        var originalMethod = typeof(HttpClient).GetMethod(
+            nameof(HttpClient.SendAsync),
+            BindingFlags.Public | BindingFlags.Instance,
+            null,
+            new Type[] { typeof(HttpRequestMessage) },
+            null
+        );
 
-        harmony.Patch(originalMethod, prefix: new HarmonyMethod(prefixPatch));
-
-
+        var prefixMethod = typeof(Program).GetMethod(nameof(PatchSendAsync));
+        harmony.Patch(originalMethod, prefix: new HarmonyMethod(prefixMethod));
+       
+        
         var entryPoint = assembly.EntryPoint;
         if (entryPoint == null)
         {
@@ -62,65 +68,68 @@ class Program
         Console.ReadKey();
     }
 
-    public static bool Patch(ref JsonElement __instance, string propertyName, ref JsonElement __result)
+    public static bool PatchSendAsync(ref Task<HttpResponseMessage> __result, HttpRequestMessage request)
     {
-        if (propertyName == "message")
+        try
         {
-            if (__instance.TryGetProperty("message", out JsonElement realProp))
-            {
-                string realValue = realProp.GetString();
-                if (realValue == "key_unavailable" ||
-                    realValue == "account_unavailable"  ||
-                    realValue == "hwid_incorrect" ||
-                    realValue == "subscription_expired" ||
-                    realValue == "user_is_banned" ||
-                    realValue == "account_unavailable"  ||
-                    realValue == "session_expired"  ||
-                    realValue == "session_overcrowded"  ||
-                    realValue == "session_already_used")
-                {
-                    __result = Create("login_success");
-                    return false;
-                }
-
+            if (request.RequestUri == null || !request.RequestUri.ToString().Contains("eauth.us.to"))
                 return true;
+            if (request.Content != null)
+            {
+                string requestBody = request.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                if (requestBody.Contains("\"type\":\"login\"") || requestBody.Contains("\"type\": \"login\""))
+                {
+                    string interceptedPair = request.Headers.UserAgent?.ToString();
+                    if (string.IsNullOrEmpty(interceptedPair)) interceptedPair = "signature_missing";
+
+                    var hwidMatch = Regex.Match(requestBody, "\"hwid\"\\s*:\\s*\"([^\"]+)\"");
+                    string interceptedHwid = hwidMatch.Success ? hwidMatch.Groups[1].Value : "bypass_hwid";
+
+                    string fullJson = "{" +
+                                      "\"message\":\"login_success\"," +
+                                      "\"rank\":\"test\"," +
+                                      "\"register_date\":\"2025-01-19\"," +
+                                      "\"expire_date\":\"2099-12-31\"," +
+                                      $"\"hwid\":\"{interceptedHwid}\"," +
+                                      $"\"pair\":\"{interceptedPair}\"" +
+                                      "}";
+
+                    string dataToSign = APP_SECRET + "login_success" + fullJson;
+                    string validHash = ComputeSHA512(dataToSign);
+                    var fakeResponse = new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(fullJson, Encoding.UTF8, "application/json")
+                    };
+                    fakeResponse.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                    fakeResponse.Headers.Add("Eauth", validHash);
+                    __result = Task.FromResult(fakeResponse);
+                    return false; 
+                }
             }
         }
-
-        if (propertyName == "rank")
+        catch (Exception ex)
         {
-            __result = Create("test");
-            return false;
+            Console.WriteLine($"[Hata] {ex.Message}");
+            return true;
         }
 
-        if (propertyName == "hwid")
-        {
-            __result = Create("test");
-            return false;
-        }
-
-        if (propertyName == "expire_date")
-        {
-            __result = Create(DateTime.MaxValue.ToString());
-            return false;
-        }
-
-        if (propertyName == "register_date")
-        {
-            __result = Create(DateTime.Now.ToString());
-            return false;
-        }
-
-        if (__instance.TryGetProperty(propertyName, out JsonElement originalValue))
-        {
-            __result = originalValue;
-            return false;
-        }
-        return false;
+        return true;
     }
 
-    private static JsonElement Create(string value)
+    public static string ComputeSHA512(string input)
     {
-        return JsonDocument.Parse(JsonSerializer.Serialize(value)).RootElement;
+        using (SHA512 sha512 = SHA512.Create())
+        {
+            byte[] inputBytes = Encoding.UTF8.GetBytes(input);
+            byte[] hashBytes = sha512.ComputeHash(inputBytes);
+            StringBuilder sb = new StringBuilder();
+            foreach (byte b in hashBytes)
+            {
+                sb.Append(b.ToString("x2"));
+            }
+            return sb.ToString();
+        }
     }
+
 }
