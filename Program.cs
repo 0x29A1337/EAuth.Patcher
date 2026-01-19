@@ -70,9 +70,7 @@ class Program
 
     public static bool PatchSendAsync(ref Task<HttpResponseMessage> __result, HttpRequestMessage request)
     {
-        try
-        {
-            if (request.RequestUri == null || !request.RequestUri.ToString().Contains("eauth.us.to"))
+           if (request.RequestUri == null || !request.RequestUri.ToString().Contains("eauth.us.to"))
                 return true;
             if (request.Content != null)
             {
@@ -81,10 +79,10 @@ class Program
                 if (requestBody.Contains("\"type\":\"login\"") || requestBody.Contains("\"type\": \"login\""))
                 {
                     string interceptedPair = request.Headers.UserAgent?.ToString();
-                    if (string.IsNullOrEmpty(interceptedPair)) interceptedPair = "signature_missing";
+                    if (string.IsNullOrEmpty(interceptedPair)) interceptedPair = "null";
 
                     var hwidMatch = Regex.Match(requestBody, "\"hwid\"\\s*:\\s*\"([^\"]+)\"");
-                    string interceptedHwid = hwidMatch.Success ? hwidMatch.Groups[1].Value : "bypass_hwid";
+                    string interceptedHwid = hwidMatch.Success ? hwidMatch.Groups[1].Value : "null";
 
                     string fullJson = "{" +
                                       "\"message\":\"login_success\"," +
@@ -107,13 +105,6 @@ class Program
                     return false; 
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[Hata] {ex.Message}");
-            return true;
-        }
-
         return true;
     }
 
