@@ -44,7 +44,21 @@ class Program
 
         var prefixMethod = typeof(Program).GetMethod(nameof(PatchSendAsync));
         harmony.Patch(originalMethod, prefix: new HarmonyMethod(prefixMethod));
-       
+
+        var originalMethod2 = typeof(RSA).GetMethod(
+                nameof(RSA.VerifyData),
+                BindingFlags.Instance | BindingFlags.Public,
+                null,
+                new Type[] {
+                    typeof(byte[]),         
+                    typeof(byte[]),            
+                    typeof(HashAlgorithmName), 
+                    typeof(RSASignaturePadding) 
+                },
+                null);
+
+        var prefixMethod2 = typeof(Program).GetMethod(nameof(PatchRsaVerifyData));
+        harmony.Patch(originalMethod2, prefix: new HarmonyMethod(prefixMethod2));
         
         var entryPoint = assembly.EntryPoint;
         if (entryPoint == null)
@@ -66,6 +80,19 @@ class Program
             return;
         }
         Console.ReadKey();
+    }
+
+    public static bool PatchRsaVerifyData(
+            HashAlgorithmName hashAlgorithm,
+            RSASignaturePadding padding,
+            ref bool __result)
+    {
+        if (hashAlgorithm == HashAlgorithmName.SHA256 && padding == RSASignaturePadding.Pkcs1)
+        {
+            __result = true; 
+            return false;    
+        }
+        return true;    
     }
 
     public static bool PatchSendAsync(ref Task<HttpResponseMessage> __result, HttpRequestMessage request)
@@ -100,7 +127,7 @@ class Program
                         Content = new StringContent(fullJson, Encoding.UTF8, "application/json")
                     };
                     fakeResponse.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-                    fakeResponse.Headers.Add("Eauth", validHash);
+                    fakeResponse.Headers.Add("Signature", validHash);
                     __result = Task.FromResult(fakeResponse);
                     return false; 
                 }
